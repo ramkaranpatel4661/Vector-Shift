@@ -1,20 +1,13 @@
 // submit.js
 // Sends pipeline (nodes + edges) to backend and shows parse result in an alert.
 
-import { useStore } from './store';
-import { shallow } from 'zustand/shallow';
-
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
-const selector = (state) => ({
-  nodes: state.nodes,
-  edges: state.edges,
-});
-
 export const SubmitButton = () => {
-  const { nodes, edges } = useStore(selector, shallow);
-
   const handleSubmit = async () => {
+    // Get nodes and edges from window (set by PipelineUI)
+    const { nodes = [], edges = [] } = window.__pipelineData || {};
+
     const payload = {
       nodes: nodes.map(({ id, type, position, data }) => ({
         id,

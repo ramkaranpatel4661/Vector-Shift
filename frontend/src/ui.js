@@ -1,11 +1,15 @@
 // ui.js
-// Displays the drag-and-drop UI
-// --------------------------------------------------
+import { useState, useRef, useCallback } from 'react';
+import ReactFlow, {
+  Controls,
+  Background,
+  MiniMap,
+  addEdge,
+  applyNodeChanges,
+  applyEdgeChanges,
+} from 'reactflow';
+import 'reactflow/dist/style.css';
 
-import { useState, useRef, useEffect } from 'react';
-import ReactFlow, { Controls, Background, MiniMap } from 'reactflow';
-import { useStore } from './store';
-import { shallow } from 'zustand/shallow';
 import { InputNode } from './nodes/inputNode';
 import { LLMNode } from './nodes/llmNode';
 import { OutputNode } from './nodes/outputNode';
@@ -16,10 +20,6 @@ import { ApiNode } from './nodes/apiNode';
 import { EmbeddingNode } from './nodes/embeddingNode';
 import { SummarizeNode } from './nodes/summarizeNode';
 
-import 'reactflow/dist/style.css';
-
-const gridSize = 20;
-const proOptions = { hideAttribution: true };
 const nodeTypes = {
   customInput: InputNode,
   llm: LLMNode,
@@ -32,128 +32,110 @@ const nodeTypes = {
   summarize: SummarizeNode,
 };
 
-const selector = (state) => ({
-  nodes: state.nodes,
-  edges: state.edges,
-  getNodeID: state.getNodeID,
-  addNode: state.addNode,
-  onNodesChange: state.onNodesChange,
-  onEdgesChange: state.onEdgesChange,
-  onConnect: state.onConnect,
-});
+// Start with two test nodes
+const initialNodes = [
+  {
+    id: 'node-1',
+    type: 'customInput',
+    position: { x: 100, y: 100 },
+    data: { id: 'node-1', nodeType: 'customInput' },
+  },
+  {
+    id: 'node-2',
+    type: 'llm',
+    position: { x: 400, y: 100 },
+    data: { id: 'node-2', nodeType: 'llm' },
+  },
+];
+
+let nodeId = 3;
+const getNodeId = () => `node-${nodeId++}`;
 
 export const PipelineUI = () => {
-    const reactFlowWrapper = useRef(null);
-    const [reactFlowInstance, setReactFlowInstance] = useState(null);
-    const {
-      nodes,
-      edges,
-      getNodeID,
-      addNode,
-      onNodesChange,
-      onEdgesChange,
-      onConnect
-    } = useStore(selector, shallow);
+  const reactFlowWrapper = useRef(null);
+  const [nodes, setNodes] = useState(initialNodes);
+  const [edges, setEdges] = useState([]);
+  const [reactFlowInstance, setReactFlowInstance] = useState(null);
 
-    // Store the latest values in refs so event handlers always have current values
-    const reactFlowInstanceRef = useRef(null);
-    const getNodeIDRef = useRef(getNodeID);
-    const addNodeRef = useRef(addNode);
-    
-    useEffect(() => {
-        reactFlowInstanceRef.current = reactFlowInstance;
-    }, [reactFlowInstance]);
-    
-    useEffect(() => {
-        getNodeIDRef.current = getNodeID;
-        addNodeRef.current = addNode;
-    }, [getNodeID, addNode]);
+  const onNodesChange = useCallback(
+    (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
+    []
+  );
 
-    // Set up drag and drop using window-level listeners
-    useEffect(() => {
-        const handleDragOver = (event) => {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = 'move';
-        };
+  const onEdgesChange = useCallback(
+    (changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),
+    []
+  );
 
-        const handleDrop = (event) => {
-            event.preventDefault();
-            
-            const wrapper = reactFlowWrapper.current;
-            if (!wrapper) return;
+  const onConnect = useCallback(
+    (connection) => setEdges((eds) => addEdge(connection, eds)),
+    []
+  );
 
-            // Check if drop is within the wrapper bounds
-            const bounds = wrapper.getBoundingClientRect();
-            if (
-                event.clientX < bounds.left ||
-                event.clientX > bounds.right ||
-                event.clientY < bounds.top ||
-                event.clientY > bounds.bottom
-            ) {
-                return; // Drop outside canvas, ignore
-            }
+  const onDragOver = useCallback((event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
 
-            const data = event.dataTransfer.getData('application/reactflow');
-            if (!data) return;
+  const onDrop = useCallback(
+    (event) => {
+      event.preventDefault();
 
-            let type;
-            try {
-                const parsed = JSON.parse(data);
-                type = parsed.nodeType;
-            } catch (e) {
-                type = data;
-            }
+      if (!reactFlowWrapper.current || !reactFlowInstance) return;
 
-            if (!type) return;
+      let type = event.dataTransfer.getData('application/reactflow');
+      
+      // Try parsing as JSON if it looks like JSON
+      if (type && type.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(type);
+          type = parsed.nodeType;
+        } catch (e) {
+          // Keep original type
+        }
+      }
 
-            const x = event.clientX - bounds.left;
-            const y = event.clientY - bounds.top;
+      if (!type) return;
 
-            // Use project if available, otherwise use raw coordinates
-            const instance = reactFlowInstanceRef.current;
-            const position = instance?.project
-                ? instance.project({ x, y })
-                : { x, y };
+      const bounds = reactFlowWrapper.current.getBoundingClientRect();
+      const position = reactFlowInstance.project({
+        x: event.clientX - bounds.left,
+        y: event.clientY - bounds.top,
+      });
 
-            const nodeID = getNodeIDRef.current(type);
-            const newNode = {
-                id: nodeID,
-                type,
-                position,
-                data: { id: nodeID, nodeType: type },
-            };
+      const newNode = {
+        id: getNodeId(),
+        type,
+        position,
+        data: { nodeType: type },
+      };
 
-            addNodeRef.current(newNode);
-        };
+      setNodes((nds) => [...nds, newNode]);
+    },
+    [reactFlowInstance]
+  );
 
-        // Add listeners to window to catch all drops
-        window.addEventListener('dragover', handleDragOver);
-        window.addEventListener('drop', handleDrop);
+  // Export nodes and edges for submit button
+  window.__pipelineData = { nodes, edges };
 
-        return () => {
-            window.removeEventListener('dragover', handleDragOver);
-            window.removeEventListener('drop', handleDrop);
-        };
-    }, []);
-
-    return (
-        <div ref={reactFlowWrapper} className="react-flow-wrapper">
-            <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={onConnect}
-                onInit={setReactFlowInstance}
-                nodeTypes={nodeTypes}
-                proOptions={proOptions}
-                snapGrid={[gridSize, gridSize]}
-                connectionLineType="smoothstep"
-            >
-                <Background color="#aaa" gap={gridSize} />
-                <Controls />
-                <MiniMap />
-            </ReactFlow>
-        </div>
-    );
-}
+  return (
+    <div ref={reactFlowWrapper} className="react-flow-wrapper">
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        onInit={setReactFlowInstance}
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        nodeTypes={nodeTypes}
+        fitView
+      >
+        <Background color="#aaa" gap={20} />
+        <Controls />
+        <MiniMap />
+      </ReactFlow>
+    </div>
+  );
+};
