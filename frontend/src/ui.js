@@ -2,7 +2,7 @@
 // Displays the drag-and-drop UI
 // --------------------------------------------------
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import ReactFlow, { Controls, Background, MiniMap } from 'reactflow';
 import { useStore } from './store';
 import { shallow } from 'zustand/shallow';
@@ -55,23 +55,46 @@ export const PipelineUI = () => {
       onConnect
     } = useStore(selector, shallow);
 
-    const onDragOver = useCallback((event) => {
-        event.preventDefault();
-        event.dataTransfer.dropEffect = 'move';
-    }, []);
+    // Store the latest values in refs so event handlers always have current values
+    const reactFlowInstanceRef = useRef(null);
+    const getNodeIDRef = useRef(getNodeID);
+    const addNodeRef = useRef(addNode);
+    
+    useEffect(() => {
+        reactFlowInstanceRef.current = reactFlowInstance;
+    }, [reactFlowInstance]);
+    
+    useEffect(() => {
+        getNodeIDRef.current = getNodeID;
+        addNodeRef.current = addNode;
+    }, [getNodeID, addNode]);
 
-    const onDrop = useCallback(
-        (event) => {
+    // Set up drag and drop using window-level listeners
+    useEffect(() => {
+        const handleDragOver = (event) => {
             event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+        };
 
-            if (!reactFlowWrapper.current) return;
-
-            const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
-            const data = event.dataTransfer.getData('application/reactflow');
+        const handleDrop = (event) => {
+            event.preventDefault();
             
-            if (!data) {
-                return;
+            const wrapper = reactFlowWrapper.current;
+            if (!wrapper) return;
+
+            // Check if drop is within the wrapper bounds
+            const bounds = wrapper.getBoundingClientRect();
+            if (
+                event.clientX < bounds.left ||
+                event.clientX > bounds.right ||
+                event.clientY < bounds.top ||
+                event.clientY > bounds.bottom
+            ) {
+                return; // Drop outside canvas, ignore
             }
+
+            const data = event.dataTransfer.getData('application/reactflow');
+            if (!data) return;
 
             let type;
             try {
@@ -81,19 +104,18 @@ export const PipelineUI = () => {
                 type = data;
             }
 
-            if (!type) {
-                return;
-            }
+            if (!type) return;
 
-            const x = event.clientX - reactFlowBounds.left;
-            const y = event.clientY - reactFlowBounds.top;
-            
+            const x = event.clientX - bounds.left;
+            const y = event.clientY - bounds.top;
+
             // Use project if available, otherwise use raw coordinates
-            const position = reactFlowInstance?.project 
-                ? reactFlowInstance.project({ x, y })
+            const instance = reactFlowInstanceRef.current;
+            const position = instance?.project
+                ? instance.project({ x, y })
                 : { x, y };
 
-            const nodeID = getNodeID(type);
+            const nodeID = getNodeIDRef.current(type);
             const newNode = {
                 id: nodeID,
                 type,
@@ -101,10 +123,18 @@ export const PipelineUI = () => {
                 data: { id: nodeID, nodeType: type },
             };
 
-            addNode(newNode);
-        },
-        [reactFlowInstance, getNodeID, addNode]
-    );
+            addNodeRef.current(newNode);
+        };
+
+        // Add listeners to window to catch all drops
+        window.addEventListener('dragover', handleDragOver);
+        window.addEventListener('drop', handleDrop);
+
+        return () => {
+            window.removeEventListener('dragover', handleDragOver);
+            window.removeEventListener('drop', handleDrop);
+        };
+    }, []);
 
     return (
         <div ref={reactFlowWrapper} className="react-flow-wrapper">
@@ -114,8 +144,6 @@ export const PipelineUI = () => {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
-                onDrop={onDrop}
-                onDragOver={onDragOver}
                 onInit={setReactFlowInstance}
                 nodeTypes={nodeTypes}
                 proOptions={proOptions}
