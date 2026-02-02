@@ -2,7 +2,7 @@
 // Displays the drag-and-drop UI
 // --------------------------------------------------
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactFlow, { Controls, Background, MiniMap } from 'reactflow';
 import { useStore } from './store';
 import { shallow } from 'zustand/shallow';
@@ -35,6 +35,8 @@ const nodeTypes = {
 const selector = (state) => ({
   nodes: state.nodes,
   edges: state.edges,
+  getNodeID: state.getNodeID,
+  addNode: state.addNode,
   onNodesChange: state.onNodesChange,
   onEdgesChange: state.onEdgesChange,
   onConnect: state.onConnect,
@@ -43,65 +45,68 @@ const selector = (state) => ({
 export const PipelineUI = () => {
     const reactFlowWrapper = useRef(null);
     const [reactFlowInstance, setReactFlowInstance] = useState(null);
-    const instanceRef = useRef(null);
-    instanceRef.current = reactFlowInstance;
+    const {
+      nodes,
+      edges,
+      getNodeID,
+      addNode,
+      onNodesChange,
+      onEdgesChange,
+      onConnect
+    } = useStore(selector, shallow);
 
-    const { nodes, edges, onNodesChange, onEdgesChange, onConnect } = useStore(selector, shallow);
+    const onDragOver = useCallback((event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+    }, []);
 
-    useEffect(() => {
-        const wrapper = reactFlowWrapper.current;
-        if (!wrapper) return;
+    const onDrop = useCallback(
+        (event) => {
+            event.preventDefault();
 
-        const handleDragOver = (e) => {
-            if (!e.dataTransfer.types.includes('application/reactflow')) return;
-            e.preventDefault();
-            e.stopPropagation();
-            e.dataTransfer.dropEffect = 'move';
-        };
+            if (!reactFlowWrapper.current) return;
 
-        const handleDrop = (e) => {
-            if (!e.dataTransfer.types.includes('application/reactflow')) return;
-            e.preventDefault();
-            e.stopPropagation();
-
-            const raw = e.dataTransfer.getData('application/reactflow');
-            if (!raw) return;
+            const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
+            const data = event.dataTransfer.getData('application/reactflow');
+            
+            if (!data) {
+                return;
+            }
 
             let type;
             try {
-                const parsed = JSON.parse(raw);
-                type = parsed?.nodeType || (typeof raw === 'string' && raw.length < 50 ? raw : null);
-            } catch (_) {
-                type = raw;
+                const parsed = JSON.parse(data);
+                type = parsed.nodeType;
+            } catch (e) {
+                type = data;
             }
-            if (!type || typeof type !== 'string') return;
 
-            const bounds = wrapper.getBoundingClientRect();
-            const x = e.clientX - bounds.left;
-            const y = e.clientY - bounds.top;
-            const instance = instanceRef.current;
-            const position = instance?.project ? instance.project({ x, y }) : { x, y };
+            if (!type) {
+                return;
+            }
 
-            const { getNodeID, addNode } = useStore.getState();
+            const x = event.clientX - reactFlowBounds.left;
+            const y = event.clientY - reactFlowBounds.top;
+            
+            // Use project if available, otherwise use raw coordinates
+            const position = reactFlowInstance?.project 
+                ? reactFlowInstance.project({ x, y })
+                : { x, y };
+
             const nodeID = getNodeID(type);
-            addNode({
+            const newNode = {
                 id: nodeID,
                 type,
                 position,
                 data: { id: nodeID, nodeType: type },
-            });
-        };
+            };
 
-        wrapper.addEventListener('dragover', handleDragOver, true);
-        wrapper.addEventListener('drop', handleDrop, true);
-        return () => {
-            wrapper.removeEventListener('dragover', handleDragOver, true);
-            wrapper.removeEventListener('drop', handleDrop, true);
-        };
-    }, []);
+            addNode(newNode);
+        },
+        [reactFlowInstance, getNodeID, addNode]
+    );
 
     return (
-        <>
         <div ref={reactFlowWrapper} className="react-flow-wrapper">
             <ReactFlow
                 nodes={nodes}
@@ -109,6 +114,8 @@ export const PipelineUI = () => {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
+                onDrop={onDrop}
+                onDragOver={onDragOver}
                 onInit={setReactFlowInstance}
                 nodeTypes={nodeTypes}
                 proOptions={proOptions}
@@ -120,6 +127,5 @@ export const PipelineUI = () => {
                 <MiniMap />
             </ReactFlow>
         </div>
-        </>
     );
 }
